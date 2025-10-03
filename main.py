@@ -24,7 +24,15 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Generic AI Content Generator")
+# FastAPI app with explicit OpenAPI configuration
+app = FastAPI(
+    title="Generic AI Content Generator",
+    description="An AI-powered content generation API with RAG capabilities using document URLs",
+    version="1.0.0",
+    openapi_url="/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
 # CORS configuration
 app.add_middleware(
@@ -154,7 +162,7 @@ async def call_ai_provider(prompt: str, temperature: float = 0.7, max_tokens: in
     try:
         logger.info(f"Calling AI provider with prompt length: {len(prompt)}")
         response = ai_client.chat.completions.create(
-            model="gpt-3.5-turbo",  # Using gpt-3.5-turbo as fallback, you can change to gpt-4 if available
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "user", "content": prompt}
             ],
@@ -169,10 +177,18 @@ async def call_ai_provider(prompt: str, temperature: float = 0.7, max_tokens: in
         raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
 
 # API Endpoints
-@app.post("/generate-content/")
+@app.post("/generate-content/", 
+          summary="Generate content with AI",
+          description="Generate content using AI with optional RAG from document URLs",
+          response_description="Generated content with metadata")
 async def generate_content(request: GenerationRequest = Body(...)):
     """
     Generate content using AI with optional RAG from documents
+    
+    - **prompt**: The main prompt for content generation (required)
+    - **document_urls**: List of document URLs for RAG context (optional)
+    - **temperature**: Controls randomness (0.0 to 1.0, default: 0.7)
+    - **max_tokens**: Maximum tokens in response (default: 2000)
     """
     try:
         logger.info("Received generate-content request")
@@ -223,10 +239,15 @@ async def generate_content(request: GenerationRequest = Body(...)):
         logger.error(f"Content generation error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/process-documents/")
+@app.post("/process-documents/",
+          summary="Process documents",
+          description="Extract text content from document URLs for preview",
+          response_description="Extracted text content from documents")
 async def process_documents_endpoint(request: DocumentRequest = Body(...)):
     """
-    Process documents and return extracted text (for testing/document preview)
+    Process documents and return extracted text content
+    
+    - **urls**: List of document URLs to process
     """
     try:
         logger.info(f"Processing {len(request.urls)} documents for preview")
@@ -250,8 +271,14 @@ async def process_documents_endpoint(request: DocumentRequest = Body(...)):
         logger.error(f"Document processing error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health")
+@app.get("/health",
+         summary="Health check",
+         description="Check API health status and configuration",
+         response_description="API health status")
 async def health_check():
+    """
+    Health check endpoint to verify API status and configuration
+    """
     ai_status = "enabled" if ai_client else "disabled"
     env_status = "loaded" if AI_API_KEY else "missing"
     return {
@@ -262,12 +289,18 @@ async def health_check():
         "embedding_model": EMBEDDING_MODEL
     }
 
-@app.get("/")
+@app.get("/",
+         summary="Root endpoint",
+         description="API information and available endpoints",
+         response_description="API information")
 async def root():
+    """
+    Root endpoint with API information
+    """
     ai_status = "enabled" if ai_client else "disabled - set OPENAI_API_KEY in .env file"
     return {
         "message": "Generic AI Content Generator API", 
-        "version": "1.0",
+        "version": "1.0.0",
         "ai_status": ai_status,
         "environment_file": "loaded" if AI_API_KEY else "missing or empty",
         "endpoints": {
@@ -276,6 +309,27 @@ async def root():
             "GET /health": "Service health check"
         }
     }
+
+# Custom OpenAPI schema to ensure compatibility
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = app.openapi()
+    
+    # Ensure OpenAPI version is set
+    openapi_schema["openapi"] = "3.1.0"
+    
+    # Add additional info
+    openapi_schema["info"]["contact"] = {
+        "name": "API Support",
+        "email": "support@example.com"
+    }
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 if __name__ == "__main__":
     import uvicorn
