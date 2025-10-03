@@ -15,6 +15,10 @@ import logging
 from urllib.parse import urlparse
 import re
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,15 +38,27 @@ app.add_middleware(
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 AI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Log environment status
+if AI_API_KEY:
+    logger.info("OpenAI API key loaded successfully")
+else:
+    logger.warning("OPENAI_API_KEY not found in environment variables")
+
 # Initialize AI client with proper error handling
 ai_client = None
 if AI_API_KEY:
     ai_client = OpenAI(api_key=AI_API_KEY)
+    logger.info("OpenAI client initialized successfully")
 else:
-    logger.warning("OPENAI_API_KEY not found. AI features will be disabled.")
+    logger.warning("OpenAI client not initialized - API key missing")
 
 # Load embedding model
-embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+try:
+    embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+    logger.info(f"Embedding model '{EMBEDDING_MODEL}' loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load embedding model: {e}")
+    raise
 
 # Request models
 class DocumentRequest(BaseModel):
@@ -58,6 +74,7 @@ class GenerationRequest(BaseModel):
 async def download_and_extract_text(url: str) -> str:
     """Download file from URL and extract text content"""
     try:
+        logger.info(f"Processing document: {url}")
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         
@@ -67,11 +84,14 @@ async def download_and_extract_text(url: str) -> str:
         if file_extension == 'pdf':
             pdf_reader = PyPDF2.PdfReader(BytesIO(content))
             text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
+            logger.info(f"Extracted {len(text)} characters from PDF")
         elif file_extension in ['docx', 'doc']:
             doc = docx.Document(BytesIO(content))
             text = "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
+            logger.info(f"Extracted {len(text)} characters from DOCX")
         elif file_extension == 'txt':
             text = content.decode('utf-8')
+            logger.info(f"Extracted {len(text)} characters from TXT")
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
         
@@ -129,9 +149,10 @@ def search_relevant_content(index, documents: List[str], query: str, k: int = 3)
 async def call_ai_provider(prompt: str, temperature: float = 0.7, max_tokens: int = 2000) -> str:
     """Call OpenAI API for content generation"""
     if not ai_client:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.")
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable in the .env file.")
     
     try:
+        logger.info(f"Calling AI provider with prompt length: {len(prompt)}")
         response = ai_client.chat.completions.create(
             model="gpt-3.5-turbo",  # Using gpt-3.5-turbo as fallback, you can change to gpt-4 if available
             messages=[
@@ -140,6 +161,7 @@ async def call_ai_provider(prompt: str, temperature: float = 0.7, max_tokens: in
             temperature=temperature,
             max_tokens=max_tokens
         )
+        logger.info("AI response received successfully")
         return response.choices[0].message.content
         
     except Exception as e:
@@ -153,14 +175,17 @@ async def generate_content(request: GenerationRequest = Body(...)):
     Generate content using AI with optional RAG from documents
     """
     try:
+        logger.info("Received generate-content request")
         rag_context = ""
         
         # Process documents if provided
         if request.document_urls:
+            logger.info(f"Processing {len(request.document_urls)} documents")
             document_texts = await process_documents(request.document_urls)
             if document_texts:
                 index = create_vector_index(document_texts)
                 rag_context = search_relevant_content(index, document_texts, request.prompt)
+                logger.info(f"RAG context extracted: {len(rag_context)} characters")
         
         # Build final prompt with RAG context
         final_prompt = request.prompt
@@ -182,6 +207,7 @@ async def generate_content(request: GenerationRequest = Body(...)):
             max_tokens=request.max_tokens
         )
         
+        logger.info("Content generation completed successfully")
         return JSONResponse(content={
             "success": True,
             "generated_content": generated_content,
@@ -203,6 +229,7 @@ async def process_documents_endpoint(request: DocumentRequest = Body(...)):
     Process documents and return extracted text (for testing/document preview)
     """
     try:
+        logger.info(f"Processing {len(request.urls)} documents for preview")
         document_texts = await process_documents(request.urls)
         
         return JSONResponse(content={
@@ -226,20 +253,23 @@ async def process_documents_endpoint(request: DocumentRequest = Body(...)):
 @app.get("/health")
 async def health_check():
     ai_status = "enabled" if ai_client else "disabled"
+    env_status = "loaded" if AI_API_KEY else "missing"
     return {
         "status": "healthy", 
         "service": "AI Content Generator",
         "ai_features": ai_status,
+        "environment_file": env_status,
         "embedding_model": EMBEDDING_MODEL
     }
 
 @app.get("/")
 async def root():
-    ai_status = "enabled" if ai_client else "disabled - set OPENAI_API_KEY environment variable"
+    ai_status = "enabled" if ai_client else "disabled - set OPENAI_API_KEY in .env file"
     return {
         "message": "Generic AI Content Generator API", 
         "version": "1.0",
         "ai_status": ai_status,
+        "environment_file": "loaded" if AI_API_KEY else "missing or empty",
         "endpoints": {
             "POST /generate-content": "Generate content with optional RAG",
             "POST /process-documents": "Preview document content extraction",
