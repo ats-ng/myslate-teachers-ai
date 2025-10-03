@@ -34,15 +34,19 @@ app.add_middleware(
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 AI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Initialize AI client
-ai_client = OpenAI(api_key=AI_API_KEY) 
+# Initialize AI client with proper error handling
+ai_client = None
+if AI_API_KEY:
+    ai_client = OpenAI(api_key=AI_API_KEY)
+else:
+    logger.warning("OPENAI_API_KEY not found. AI features will be disabled.")
 
 # Load embedding model
 embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 
 # Request models
 class DocumentRequest(BaseModel):
-    urls: List[str] 
+    urls: List[str]
 
 class GenerationRequest(BaseModel):
     prompt: str
@@ -124,9 +128,12 @@ def search_relevant_content(index, documents: List[str], query: str, k: int = 3)
 
 async def call_ai_provider(prompt: str, temperature: float = 0.7, max_tokens: int = 2000) -> str:
     """Call OpenAI API for content generation"""
+    if not ai_client:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.")
+    
     try:
         response = ai_client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-3.5-turbo",  # Using gpt-3.5-turbo as fallback, you can change to gpt-4 if available
             messages=[
                 {"role": "user", "content": prompt}
             ],
@@ -216,15 +223,23 @@ async def process_documents_endpoint(request: DocumentRequest = Body(...)):
         logger.error(f"Document processing error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health") 
+@app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "AI Content Generator"}
+    ai_status = "enabled" if ai_client else "disabled"
+    return {
+        "status": "healthy", 
+        "service": "AI Content Generator",
+        "ai_features": ai_status,
+        "embedding_model": EMBEDDING_MODEL
+    }
 
 @app.get("/")
 async def root():
+    ai_status = "enabled" if ai_client else "disabled - set OPENAI_API_KEY environment variable"
     return {
         "message": "Generic AI Content Generator API", 
         "version": "1.0",
+        "ai_status": ai_status,
         "endpoints": {
             "POST /generate-content": "Generate content with optional RAG",
             "POST /process-documents": "Preview document content extraction",
